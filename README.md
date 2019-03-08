@@ -8,4 +8,7 @@ Mushroom_Project.Rmd - mushroom report in Rmd format. It provides project overvi
 
 Mushroom_Project.pdf - mushroom report in PDF format. It contains the rendered figure, table, and text of Mushroom_Project.Rmd without the code chunks.
 
-Note: Both the R script and the Rmd will take a while to finish. 
+**Note:**  
+Both the R script and the Rmd will take a while to finish.  
+
+Some seeding issues prevent full reproducibility as noted on for example: https://github.com/mlr-org/mlr/issues/938 

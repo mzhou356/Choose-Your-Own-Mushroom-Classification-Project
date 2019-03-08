@@ -1,0 +1,446 @@
+---
+title: "Choose Your Own: Mushroom Classification Project"
+author: "Min Zhou"
+date: "`r format(Sys.Date(), '%m-%d-%y')`"
+geometry: margin=2cm
+urlcolor: blue
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.pos = 'h',fig.align = 'center', fig.width = 5)
+```
+```{r load_libs, echo = FALSE, message=FALSE}
+library(tidyverse)
+library(caret)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+```
+```{r setup2, include=FALSE}
+theme_update(# axis labels
+             axis.title = element_text(size = 8),
+             # tick labels
+             axis.text = element_text(size = 6))
+```
+```{r load_mushroom, echo=FALSE, message=FALSE}
+# import data from UCI website 
+url_dat <- 'https://archive.ics.uci.edu/ml/machine-learning-databases/mushroom/agaricus-lepiota.data' 
+# column names from the agaricus-lepiota.names file from the UCI data website, 
+# https://archive.ics.uci.edu/ml/machine-learning-databases/mushroom/
+header <- c('class', 'cap-shape','cap-surface','cap-color','bruises','odor','gill-attachment',
+            'gill-spacing','gill-size','gill-color','stalk-shape','stalk-root',
+            'stalk-surface-above-ring','stalk-surface-below-ring','stalk-color-above-ring',
+            'stalk-color-below-ring','veil-type','veil-color','ring-number','ring-type',
+            'spore-print-color','population','habitat')%>%
+  str_replace_all('-','_')  # replace '-' with '_' for better wrangling 
+# import mushroom data into a data.frame with header as column names 
+# poisnous mushroom will be level 1 as positive class during confusion matrix
+dat <- read.csv(url_dat,header = FALSE,col.names = header)%>%
+  mutate(class=factor(class,levels=c('p','e')))  
+```
+
+# Introduction
+Vitamin D is one of the most important essential micronutrients with many known and unknown biological functions in the human body. Although sunlight is the most common source of vitamin D, due to our indoor sedentary lifestyle and the use of sunscreen for the prevention of skin cancer along with many other factors, vitamin D is one of the nutrients of public health concern (ref.1). Luckily, mushrooms with ample exposure of sunlight are a great source of vitamin D. Grocery store mushrooms without the exposure of sunlight are not a good source of vitamin D. You can place them under the sunlight to harvest vitamin D (ref.2), but it is much more fun to forage your own vitamin D rich mushrooms in the wild. Mushroom hunting if done wrong can be deadly. For example, mistaking baby death caps for white button mushrooms is an often fatal mistake as consuming only half of the death cap mushroom can kill an adult human (ref.3). This is why I decided to use the UCI agaricus-lepiota mushroom data set (ref.4) to study key visual characteristics of these gilled mushrooms to separate the poisonous ones from the edible ones. 
+
+Agaricus is a genus of mushrooms that contains the most widely known edible and poisonous mushrooms (ref.5) while Lepiota is a genus of gilled mushrooms containing lethally poisonous species and zero known recommended species for consumption (ref.6). This mushroom data set contains hypothetical samples based on 23 species of gilled Agaricus and Lepiota mushrooms. Although the data set only labels each mushroom as either p (poisonous) or e (edible), originally, each species is identified as definitely edible, definitely poisonous, and unknown edibility. For safety purposes, the unknown edibility is also labeled as p for poisonous. There are total `r nrow(dat)` observations with `r ncol(dat)-1` features. Detailed information about each of the different features can be found in section 7 of the agaricus-lepiota.names file (ref.7). The key goals for this **Choose Your Own Project** is to **find the most important visual features for accurately distinguishing poisonous mushrooms from the edible ones when mushroom foraging in the wild**. **100% accuracy** will also be the goal for this project as the consequences of being wrong can be fatal. We choose to focus on visual characteristics because these features can be much easier to qualify compared to odor and other nonvisiual attributes, especially when reference images are available. For those who are interested in more details, key visual reference tutorials for mushrooms and a spore print color guide can be found in (ref.8,9).
+```{r create_test_train_set,echo=FALSE, message=FALSE, }
+# split data set into test(20%) and train(80%) sets
+# set seed for reproducibility
+set.seed(1)
+# 20% test and 80% train 
+test_index <- createDataPartition(y = dat$class,times = 1,p = 0.2,list = FALSE)  
+test <- dat[test_index,]
+train <- dat[-test_index,]           
+# set y as the class labels for mushrooms in the test set 
+y <- test$class
+# remove class labels from the test set
+test <- test%>%select(-class)
+# remove unncessary data
+rm(url_dat,header,dat,test_index)
+```
+# Data Analysis and Feature Selection
+The initial data set is split randomly into train (~ 80%) and test (~20%) sets. All data analysis and model fitting are performed on the train set and the test set is only used for assessing model performance (prediction accuracy). Below is a quick overview of the column variable types for the train set.
+```{r train_summary, echo=FALSE, results='asis'}
+# look at the variable type for each column 
+#and display in kable table format 
+train%>%
+  sapply(function(c){class(c)})%>%
+  kable(col.names = c('var_type'))%>%
+  kable_styling(font_size = 7,position = 'center')%>%
+  column_spec(1,border_left = T)%>%
+  column_spec(2,border_right = T)%>%
+  row_spec(0,bold=T)
+```
+Since all columns of this data set are of variable type factor, we will take a look at the number of factor levels to check for column variabilities. 
+```{r col_levels_n, echo=FALSE, results='asis'}
+# look at the number of factor levels 
+#for each column and display in kable table format 
+train%>%
+  sapply(function(c){nlevels(c)})%>%
+  kable(col.names = c('factor_level_number'))%>%
+  kable_styling(font_size = 7,position = 'center')%>%
+  column_spec(1,border_left = T)%>%
+  column_spec(2,border_right = T)%>%
+  row_spec(0,bold=T)
+```  
+In addition to the removal of nonvisual features (`odor`, `population`, and `habitat`), the `veil_type` is removed since it has zero column variablity (only one level). Before further data exploration, let's check for any NAs in the remaining columns of the train set. 
+```{r data_processing, echo=FALSE, results='asis'}
+# remove veil type, odor, population, and habitat
+train <- train%>%
+  select(-veil_type,-odor,-population,-habitat)
+# check for NAs in the remaining columns 
+#and display in kable table format
+train%>%
+  sapply(function(c){sum(is.na(c))})%>%
+  kable(col.names = c('Number_of_NAs'))%>%
+  kable_styling(font_size = 7,position = 'center')%>%
+  column_spec(1,border_left = T)%>%
+  column_spec(2,border_right = T)%>%
+  row_spec(0,bold=T)
+```
+With zero NAs, we now look at the relationship between each remaining features and the mushroom class label visually first. 
+```{r visual_exploration, echo= FALSE, message=FALSE, warning=FALSE,fig.height=2.5}
+# a vector of column features only 
+features <- names(train[,-1])  
+# plot histogram distribution of each feature with green color as edible and red color as poisonous 
+# save all plots in the object, plots as a list
+plots <- lapply(features, function(c){
+  train%>%
+    ggplot(aes_string(c))+
+    geom_histogram(aes(fill=class),stat='count')+
+    scale_fill_manual(values = c('red','green'))+
+    theme(legend.position = 'none')
+  })
+# arrange all cap features in the same row
+grid.arrange(plots[[1]],plots[[2]],plots[[3]],ncol=3)
+# arrange all gill features in a 2 by 2 grid
+grid.arrange(plots[[5]],plots[[6]],plots[[7]],plots[[8]],
+             ncol=2)
+# arrange all stalk features in a 3 by 3 grid
+grid.arrange(plots[[9]],plots[[10]],plots[[11]],plots[[12]],
+             plots[[13]],plots[[14]],ncol=3)
+# arrange all ring features in the same row
+grid.arrange(plots[[16]],plots[[17]],ncol=2)
+# arrange bruises, veil_color, and spore_print_color in the same row
+grid.arrange(plots[[4]],plots[[15]],plots[[18]],ncol=3)
+# remove unncessary data
+rm(plots)
+```
+In the above plots, the red color designates poisonous mushrooms and the green color represents edible mushrooms. From the plots, we can see a number of features always indicate a poisonous mushroom (e.g, green `gill_color` or `spore_print_color`), while others always indicate an edible mushroom (e.g., green and purple `cap_color` and flaring `ring_type`). The plots definitely suggest strong correlation between each of the remaining features and the mushroom class label. To check the correlation statistically, we will perform a Chi-squared test and use a p-value of 0.01 to reject or accept the $H_0$ hypothesis (the null hypothesis: the two variables are independent). If the p-value is less than 0.01, we will reject $H_0$ and assume that there is a correlation between the feature and the class label (ref.10). 
+```{r class_feature_correlation, echo=FALSE, results='asis'}
+# check correlation between each variable and class using chisq test 
+# and use p-value of 0.01 to reject or accept null hypothesis
+# if p-value < 0.01, we will say correlated to class label, otherwise, non_correlated
+# save the result in the object, correlated (a character vector)
+correlated <- sapply(2:19, function(i){
+  p_value <- chisq.test(train[,i],train$class, simulate.p.value = TRUE)$p.value
+  ifelse(p_value>=0.01, 'non_correlated','correlated')
+ })  
+# display the result in a kable table format
+# the vector features is created previously in the visual_exploration r code chunk
+data.frame(features=features, correlation = correlated)%>%
+  kable()%>%
+  kable_styling(font_size = 7,position = 'center')%>%
+  column_spec(1,border_left = T)%>%
+  column_spec(2,border_right = T)%>%
+  row_spec(0,bold=T)
+# remove unncessary data
+rm(correlated)
+```
+The Chi-squared test result suggests that all 18 remaining features are correlated with the class label. Before we move onto model fitting, let's use Chi-squared test to also check if the features are correlated with one another, again using p-value of 0.01. 
+```{r feature_feature_correlation, echo= FALSE, message=FALSE}
+# create feature to each feature combination index data frame
+index_grid <- expand.grid(2:19,2:19)  # 324 rows (each row is one combination)
+# save the correlation result in an 18 by 18 matrix
+correlation_m<- sapply(1:nrow(index_grid), function(i){
+  n <- index_grid[i,1]  # feature 1 from ith row, column 1 
+  m <- index_grid[i,2]  # feature 2 from ith row, column 2
+  p_value <- chisq.test(train[,n],train[,m],simulate.p.value = TRUE)$p.value
+  ifelse(p_value > 0.01, 'non_correlated','correlated')
+})%>% matrix( nrow=18,byrow = FALSE)  # each column is each feature, each row is each feature, fill the column first 
+# the vector features is created previously in the visual_exploration r code chunk
+rownames(correlation_m)<-features  # set the row names 
+colnames(correlation_m)<-features  # set the column names
+# due to the size of the matrix, display the matrix in 3 seperate kable table format
+# each table contains 6 features 
+correlation_m[,1:6] %>%
+  kable()%>%
+  kable_styling(font_size = 7,position = 'center')%>%
+  column_spec(1,border_left = T)%>%
+  column_spec(7,border_right = T)
+correlation_m[,7:12] %>%
+  kable()%>%
+  kable_styling(font_size = 7,position = 'center')%>%
+  column_spec(1,border_left = T)%>%
+  column_spec(7,border_right = T)
+correlation_m[,13:18] %>%
+  kable()%>%
+  kable_styling(font_size = 6.5,position = 'center')%>%
+  column_spec(1,border_left = T)%>%
+  column_spec(7,border_right = T)
+# remove unncessary data
+rm(index_grid,features,correlation_m)
+```
+We can see that, with the exception of `ring_number` and `veil_color`, all the other features appear to be intercorrelated according to the Chi-squared test. For this reason, we will keep all 18 features for now and use tree based models for classification and feature importance ranking because tree based models don't require the attributes to be independent. Tree based models also have many other benefits especially their ease of use. 
+
+# Method and Analysis
+
+## Decision Tree
+
+*rpart* and *rpart.plot* libraries are used to perform decision tree classification. We will use `rpart.control` and `plotcp` to find the best Complexity Parameter, `cp` (ref.11).
+```{r decision_tree, echo=FALSE, message=FALSE, fig.height=4}
+# load libraries for decision tree
+library(rpart)
+library(rpart.plot)
+# fit model_1 using train set, use rpart.control to find the best cp (set cp to zero first)
+model_1 <- rpart(class~., data = train,method = 'class', control = rpart.control(cp=0))
+plotcp(model_1)  # visually look at the best cp 
+opt_index <- which.min(model_1$cptable[,'xerror'])  # find the index for the lowest xerror
+cp_opt <- model_1$cptable[opt_index,'CP']  # use opt_index to find the optimal cp 
+model_1 <- prune(tree = model_1,cp=cp_opt)  # prune the tree with the best cp
+# plot the tree, set poisonous as red and edible as green
+rpart.plot(x = model_1, box.palette = c('red','green'), type =5, extra = 0)
+# use the varImp function from caret package to plot the importance levels from the most to least important 
+varImp(model_1)%>%
+  mutate(features = rownames(.))%>%
+  ggplot(aes(x=reorder(features, Overall),y = Overall))+
+  geom_bar(stat = 'identity',aes(fill=features))+
+  theme(axis.text.y=element_text(hjust=1,face ='bold'), legend.position = 'none')+
+  xlab('')+
+  ylab('Importance Level')+
+  coord_flip()
+# save the top 5 most important features in the character vector top_5_1 for model comparison
+top_5_1 <- varImp(model_1)%>%
+  mutate(var=rownames(.))%>%
+  arrange(desc(Overall))%>%
+  head(n=5)%>%.$var
+# test the model accuracy on test set
+# transform the test set by removing the veil type, odor, population, and habitat
+test_m<- test%>%
+  select(-c('veil_type','habitat','odor','population'))
+y_hat1 <- predict(model_1, newdata = test_m, type = 'class')
+# save the model_1 accuracy result as accuracy_1 for final model comparison table
+accuracy_1 <- paste0(confusionMatrix(y_hat1,y)$overall['Accuracy']*100, '%')
+# remove unncessary data
+rm(test,opt_index,cp_opt, y_hat1)
+```
+The `cp` plot shows that a `cp` of 0 gives the lowest error. Looking at the `Importance Level` plot, the top 5 features using *decision tree classification method* are `spore_print_color`, `gill_color`, `ring_type`, `stalk_surface_above_ring`, and `stalk_surface_below_ring` while `gill_attachment` and `veil_color` have almost zero importance. The *accuracy* using this simple method is `r accuracy_1`. The splitting process can be easily interpreted visually using the decision tree plot above where the red "p" stands for poisonous and the green "e" stands for edible. 
+
+One thing to note is that although `gill_color` is the second most important feature in the `Importance Level` plot, the feature is not present in the decision tree splitting plot. This is easily explained. First, the feature importance here is calculated based on the *Gini Importance* but the splitting of the tree is based on *Gini Impurity* (ref.12). The two criteria are not the same. In addition, if you review the mushroom spore print color guide link (ref.9) in the **References** section, the site mentions that the easiest way to check spore color is to look at the gill color if the mushrooms are mature. The `gill_color` is heavily correlated to the `spore_print_color` for mature mushrooms.
+
+## Gradient Boosted Machine (GBM)
+
+Although the basic *decision tree classification method* gives an *accuracy* of 100% and provides a very easy to understand decision tree plot, the features are highly intercorrelated and decision tree splits can be highly variable with just slight changes in the observations (ref.13). To make the classification more robust, we will use *gradient boosted decision tree model* (ref.14). We will use the *gbm* library and use `gbm.perf` with a cross validation of 5 folds to test for the optimal number of trees for the classification prediction. The *gbm model* also provides information for feature importance (ref.15). 
+```{r gbm_tree, echo=FALSE, message=FALSE,fig.height=4}
+# load the library for gbm tree
+library(gbm)
+# for binary classification, convert 'p' as 1 and 'e' as 1, p is positive class in confusion matrix 
+train_m <- train%>%mutate(class=ifelse(class =='p',1,0))
+set.seed(20) # set a seed for reproduciblity
+# fit model_2 using train set, use gbm function
+# distribution for binary classification is bernoulli distribution (1 or 0 outcome)
+# use cross validation of 5 folds and set n.tree to be 10000 (iterations)
+model_2<- gbm(class ~., distribution = 'bernoulli',data = train_m, n.trees = 10000,cv.folds = 5)  
+# use gbm.perf function to find the optimal number of trees for prediction to prevent over fitting using a 5 fold cross validation 
+ntree_opt<- gbm.perf(model_2, method = 'cv')
+# summary.gbm function provides information for feature importance level
+# the function automatically plots the default variable importance graph so it is important to set plotit to FALSE for customized plot 
+summary.gbm(model_2, plotit = FALSE)%>%
+  ggplot(aes(x=reorder(var, rel.inf),y = rel.inf))+
+  geom_bar(stat = 'identity',aes(fill=var))+
+  theme(axis.text.y=element_text(hjust=1,face ='bold'), legend.position = 'none')+
+  xlab('')+
+  ylab('Importance Level')+
+  coord_flip()
+# save the top 5 most important features in the character vector top_5_2 for model comparison
+top_5_2 <- summary.gbm(model_2, plotit = FALSE)%>%top_n(n=5)%>%
+  mutate(var=as.character(var))%>%.$var
+# test the model accuracy on the transformed test set, test_m (see model1 decision tree section)
+y_hat2<-predict(model_2, newdata = test_m,n.trees = ntree_opt, type = 'response')
+# convert the predicted value back to poisonous (>0.5) and edible class factors
+y_hat2 <- ifelse(y_hat2 >0.5, 'p','e')%>%factor(levels=c('p','e')) 
+# save the model_2 accuracy result as accuracy_2 for final model comparison table
+accuracy_2 <- paste0(confusionMatrix(y_hat2,y)$overall['Accuracy']*100, '%')
+# remove unncessary data
+rm(ntree_opt, y_hat2)
+```
+The `Iteration` (number of trees) plot shows that the optimal number of trees is close to 10000. The `Importance Level` plot shows the top 5 features using *gradient boosted decision tree method* are `spore_print_color`, `gill_size`, `ring_type`, `gill_color`, and `ring_number` while `gill_attachment`, `veil_color`, `bruises`, `stalk_surface_below_ring`, `stalk_shape`, and `stalk_root` have very tiny effects. The *accuracy* using this more sophisticated method is also `r accuracy_2`.
+
+Both models appear to agree that `veil_color` and `gill_attachment` have very little effect on the classification while `spore_print_color`, `ring_type`, and `gill_color` tend to have high importance for distinguishing the poisonous mushrooms from the edible ones. 
+
+## Random Forest with Recursive Feature Elimination (RF_RFE)
+The first two models seem to suggest that we can remove `veil_color` and `gill_attachment` from the 18 features for 100% *accuracy* prediction. Before we test out the theory, we will use the *recursive feature elimination method* (RFE) from the **caret** package and use `rfFuncs` and a cross validation of 10 folds to find out the optimal number and combination of features. `rfFuncs` is one of the pre-defined sets of RFE functions in the **caret** package for the *random forest* (RF) model (ref.16). This method is especially useful for features that are intercorrelated (ref.17). 
+```{r RF_RFE, echo=FALSE, message=FALSE, fig.height=4}
+# set a seed for reproduciblity
+# set a seed for reproduciblity
+set.seed(10)
+# use rfeControl function from caret package, rfFuncs is a predefined caret RFE function for random forest model 
+# use cross validation of 10 folds
+control <- rfeControl(functions = rfFuncs, method = 'cv',number = 10)
+# rfe function performs recursive feature elimination, set the optimal size to be between 1 to 16 features 
+rf_rfe <- rfe(x = train[,-1], y = train$class, sizes =1:16, rfeControl=control)  
+# plot the variables results to see the optimal number of features 
+plot(rf_rfe, type=c('g','o'),col='red')
+# use the varImp function from caret package to plot the importance levels from the most to least important 
+# rf_rfe$fit is the random forest model using the optimal number and combination of the features 
+varImp(rf_rfe$fit)%>%mutate(features = rownames(.))%>%
+  ggplot(aes(x=reorder(features, p),y = p))+
+  geom_bar(stat = 'identity',aes(fill=features))+
+  theme(axis.text.y=element_text(hjust=1,face ='bold'), legend.position = 'none')+
+  xlab('')+
+  ylab('Importance Level')+
+  coord_flip()
+# save the top 5 most important features in the character vector top_5_3 for model comparison
+top_5_3 <- varImp(rf_rfe$fit)%>%
+  mutate(var = rownames(.))%>%
+  arrange(desc(p))%>%
+  head(n=5)%>%.$var
+# test the model accuracy on the transformed test set, test_m (see model1 decision tree section)
+y_hat3 <- predict(rf_rfe$fit, newdata = test_m, type = 'class')
+# save the model_3 accuracy result as accuracy_3 for final model comparison table
+accuracy_3 <- paste0(confusionMatrix(y_hat3,y)$overall['Accuracy']*100, '%')
+# remove unncessary data
+rm(control, y_hat3)
+```
+The `Variables` plot shows that only 10 out of the 18 features are needed for `r accuracy_3` *accuracy* and the `Importance Level` plot shows the 10 selected features with the most important attribute at the top and the least important at the bottom. The top 5 features are `spore_print_color`, `gill_size`, `stalk_root`, `ring_number`, and `stalk_shape`. As expected from the first two models, both `veil_color` and `gill_attachment` are not needed for accurate classification along with `cap_shape`, `bruises`, `stalk_surface_above_ring`, `stalk_surface_below_ring`, `stalk_color_above_ring`, and `stalk_color_below_ring`. 
+
+Although the top 5 features for the 3 models are not in agreement, `spore_print_color` and `ring_number` appear to be ranked high in all of them and `veil_color`, `gill_attachment`, `bruises`, `stalk_color_above_ring`, `cap_shape`, and `stalk_color_below_ring` are ranked low in all of them.
+
+## $Model_1$ and $Model_2$ Revisited
+After finding out the 10 optimal features using *RF_RFE*, let's revisit both the *decision tree classification method* and *gradient boosted decision tree method* using only the 10 selected features. 
+
+### Decision Tree Revisited
+```{r decision_tree_2, echo=FALSE, message=FALSE, fig.height=4}
+# transform the train set by selecting only the RF_RFE selected features (saved in rf_rfe$optVariables as a character vector) 
+# and the class label 
+train_m <- train%>%
+  select(class, rf_rfe$optVariables)
+# transform the test_m set by selecting only the RF_RFE selected features (saved in rf_rfe$optVariables as a character vector)
+test_m <- test_m%>%
+  select(rf_rfe$optVariables)
+# fit model_1_r using train_m and selected features, use rpart.control to find the best cp (set cp to zero first)
+model_1_r <- rpart(class~., data = train_m,method = 'class', control = rpart.control(cp=0))
+plotcp(model_1_r)  # visually look at the best cp 
+opt_index_2 <- which.min(model_1_r$cptable[,'xerror'])  # find the index for the lowest xerror
+cp_opt_2 <- model_1_r$cptable[opt_index_2,'CP']  # use opt_index_2 to find the optimal cp
+model_1_r <- prune(tree = model_1_r,cp=cp_opt_2)  # prune the tree with the best cp 
+# plot the tree, set poisonous as red and edible as green
+rpart.plot(x = model_1_r, box.palette = c('red','green'), type =5, extra = 0)
+# use the varImp function from caret package to plot the importance levels from the most to least important 
+varImp(model_1_r)%>%
+  mutate(features = rownames(.))%>%
+  ggplot(aes(x=reorder(features, Overall),y = Overall))+
+  geom_bar(stat = 'identity',aes(fill=features))+
+  theme(axis.text.y=element_text(hjust=1,face ='bold'), legend.position = 'none')+
+  xlab('')+
+  ylab('Importance Level')+
+  coord_flip()
+# save the top 5 most important features in the character vector top_5_4 for model comparison
+top_5_4 <- varImp(model_1_r)%>%
+  mutate(var=rownames(.))%>%
+  arrange(desc(Overall))%>%
+  head(n=5)%>%.$var
+# test the model accuracy on the new transformed test set, test_m
+y_hat4 <- predict(model_1_r, newdata = test_m, type = 'class')
+# save the model_1_r accuracy result as accuracy_4 for final model comparison table
+accuracy_4 <- paste0(confusionMatrix(y_hat4,y)$overall['Accuracy']*100, '%')
+# remove unncessary data
+rm(train,opt_index_2,cp_opt_2, y_hat4)
+```
+The `cp` plot again shows that a `cp` of 0 gives the lowest error and according to the `Importance Level` plot, the new top 5 features using only the 10 features are `spore_print_color`, `gill_color`, `gill_size`, `ring_type`, and `gill_spacing` while `cap_surface` and `stalk_root` have the lowest importance. Both *decision tree* models have `spore_print_color`, `gill_color` and `ring_type` as the most important attributes. Interestingly, the decision tree plots for both models are exactly the same. As expected, the *accuracy* again is `r accuracy_4` since the splitting process for both tree models are exactly the same as illustrated in the tree plots.  
+
+### GBM Revisited
+```{r gbm_revisit, echo=FALSE, message=FALSE}
+# for binary classification, convert 'p' as 1 and 'e' as 1, p is positive class in confusion matrix 
+train_m <- train_m%>%mutate(class=ifelse(class =='p',1,0))  
+set.seed(20) # set a seed for reproduciblity
+# fit model_2_r using train_m (see model_4 decision tree revisit section), use gbm function
+# distribution for binary classification is bernoulli distribution (1 or 0 outcome)
+# use cross validation of 5 folds and set n.tree to be 10000 (iterations)
+model_2_r <- gbm(class ~., distribution = 'bernoulli',data = train_m, n.trees = 10000,cv.folds = 5)
+# use gbm.perf function to find the optimal number of trees for prediction to prevent over fitting using a 5 fold cross validation 
+ntree_opt_2<- gbm.perf(model_2_r, method = 'cv')  
+# summary.gbm function provides information for feature importance level
+# the function automatically plots the default variable importance graph so it is important to set plotit to FALSE for customized plot 
+summary.gbm(model_2_r, plotit = FALSE)%>%
+  ggplot(aes(x=reorder(var, rel.inf),y = rel.inf))+
+  geom_bar(stat = 'identity',aes(fill=var))+
+  theme(axis.text.y=element_text(hjust=1,face ='bold'), legend.position = 'none')+
+  xlab('')+
+  ylab('Importance Level')+
+  coord_flip()
+# save the top 5 most important features in the character vector top_5_5 for model comparison
+top_5_5 <- summary.gbm(model_2_r, plotit = FALSE)%>%
+  top_n(n=5)%>%
+  mutate(var=as.character(var))%>%.$var
+# test the model accuracy on the transformed test set, test_m (see model_4 decision tree revisit section)
+y_hat5<-predict(model_2_r, newdata = test_m,n.trees = ntree_opt_2, type = 'response')
+# convert the predicted value back to poisonous (>0.5) and edible class factors
+y_hat5<- ifelse(y_hat5 >0.5, 'p','e')%>%factor(levels=c('p','e'))
+# save the model_2_r accuracy result as accuracy_5 for final model comparison table
+accuracy_5<- paste0(confusionMatrix(y_hat5,y)$overall['Accuracy']*100, '%')
+# remove unncessary data
+rm(train_m, test_m, ntree_opt_2, y_hat5, y)
+```
+The `Iteration` plot again shows that the optimal number of trees is close to 10000 and the top 5 features using only the 10 features are the same as $model_2$. `stalk_shape`, `stalk_root`, and `cap_surface` remain as the least important attributes. Not surprisingly, the *accuracy* is still `r accuracy_5` since the overall importance ranking stays basically the same for both GBM models. 
+
+# Results
+```{r compare_accuracy,echo=FALSE,results='asis'}
+# Accuracy result in kable table format 
+# column 1, the 5 models
+# model 2, the accuracy results
+data.frame(models = c('tree','GBM','RF_RFE','tree revisit','GBM revisit'),
+           accuracy = c(accuracy_1, accuracy_2, accuracy_3, accuracy_4, accuracy_5))%>%
+  kable()%>%
+  kable_styling(position = 'center')%>%
+  column_spec(1,border_left = T)%>%
+  column_spec(2,border_right = T)%>%
+  row_spec(0,bold=T)
+# remove unncessary data
+rm(accuracy_1,accuracy_2,accuracy_3, accuracy_4,accuracy_5)
+```
+```{r compare_top5_features,echo=FALSE, results='asis'}
+# top 5 feature result in kable table format
+# each column represents each model 
+# the most important feature is listed in row 1 
+# the 5th most important feature is listed in row 5
+data.frame(tree_top_5 = top_5_1, GBM_top_5 = top_5_2,
+           RF_RFE_top_5 = top_5_3, tree_top_5_r = top_5_4, 
+           GBM_top_5_r = top_5_5)%>%
+  kable()%>%
+  kable_styling(position = 'center')%>%
+  column_spec(1,border_left = T)%>%
+  column_spec(5,border_right = T)%>%
+  row_spec(0,bold=T)
+# remove unncessary data
+rm(top_5_1,top_5_2,top_5_3,top_5_4,top_5_5)
+```
+Above are comparison tables for the 5 models. The second table lists the most important feature at the top and the 5th most important feature at the bottom. The *accuracy* remains 100% for all of the models and `spore_print_color` is consistently the most important attribute. `gill_color`, `gill_size`, and `ring_type` are listed among the top 5 features for 4 out of the 5 models. `ring_number` is listed in the top 5 features for GBM models and RF_RFE model and is the 6th most important feature in both tree models. 
+
+# Conclusions
+After using 5 tree based models, we are able to identify `spore_print_color`, `gill_color`, `gill_size`, `ring_type`, and `ring_number` as the overall 5 most important visual features. Out of the initial 22 features, 10 visual features are selected for the goal of 100% classification *accuracy*. The final 10 features are `r rf_rfe$optVariables`. Since `spore_print_color` is the most important attribute, it is crucial to be patient and let mushrooms leave a thick enough deposit on a white paper overnight before consumption. That being said, as mentioned in the **Decision Tree** section, sometimes you can use `gill_color` to find out the `spore_print_color` for mature mushrooms because as more of the spores mature, the gill color changes closer to the color of the spores. The decision tree splitting plot maps out a very easy to understand process of classifying the mushrooms into poisonous and edible ones using 9 out of the 10 selected visual features (no `gill_color`). It is important to note that decision tree is not stable and any changes in the training set can change the splitting tree (ref.13). Although GBM and RF models are harder to interpret, both methods provide more robust information based upon many trees (ref.14) and we are still able to gain valuable information on the most important visual attributes. Finally, it needs to be noted that the mushroom data set only contains a small subset of the mushrooms (ref.18) and more valuable mycological data should be acquired for more robust mushroom classification.  
+
+# References  
+1. [Dietary Guidelines 2015-2010](https://health.gov/dietaryguidelines/2015/guidelines/chapter-2/a-closer-look-at-current-intakes-and-recommended-shifts/#underconsumed-nutrients)  
+2. [Mushroom in Sunlight for vitamin D](https://fungi.com/blogs/articles/place-mushrooms-in-sunlight-to-get-your-vitamin-d)  
+3. [Wikipedia-Amanita phalloides (death cap)](https://en.wikipedia.org/wiki/Amanita_phalloides)  
+4. [UCI agaricus-lepiota mushroom data set](https://archive.ics.uci.edu/ml/datasets/mushroom/)  
+5. [Wikipedia-Agaricus](https://en.wikipedia.org/wiki/Agaricus)  
+6. [Wikipedia-Lepiota](https://en.wikipedia.org/wiki/Lepiota)  
+7. [UCI agaricus-lepiota.names](https://archive.ics.uci.edu/ml/machine-learning-databases/mushroom/agaricus-lepiota.names)  
+8. [Mushroom Visual Reference Tutorials](https://www.slideshare.net/rayborg/mushroom-tutorial)  
+9. [Spore Print Color Guide](https://www.mushroomthejournal.com/spore-color/)  
+10. [Chi-Squared Test](https://www.r-bloggers.com/chi-squared-test/)  
+11. [decision tree - rpart package](https://cran.r-project.org/web/packages/rpart/rpart.pdf)  
+12. [gini-impurity and gini-importance](https://datascience.stackexchange.com/questions/16693/interpreting-decision-tree-in-context-of-feature-importances)  
+13. [drawbacks of decision tree](https://www.brighthubpm.com/project-planning/106005-disadvantages-to-using-decision-trees/)  
+14. [tree based methods](https://lagunita.stanford.edu/c4x/HumanitiesScience/StatLearning/asset/trees.pdf)  
+15. [GBM package](https://cran.r-project.org/web/packages/gbm/gbm.pdf)  
+16. [caret Recursive Feature Elimination](https://topepo.github.io/caret/recursive-feature-elimination.html#rfe)  
+17. [Feature Selection Using Random Forest](https://towardsdatascience.com/feature-selection-using-random-forest-26d7b747597f)  
+18. [Scientific and Common Names of Mushrooms](https://www.mssf.org/cookbook/names.html)
