@@ -10,6 +10,8 @@ Mushroom_Project.Rmd - mushroom report in Rmd format. It provides project overvi
 
 Mushroom_Project.pdf - mushroom report in PDF format. It contains the rendered figure, table, and text of Mushroom_Project.Rmd without the code chunks.
 
+mushroom_dataset.csv - mushroom data set downloaded from https://archive.ics.uci.edu/ml/machine-learning-databases/mushroom/agaricus-lepiota.data as a csv file.
+
 **Note:**  
 Both the R script and the Rmd will take a while to finish.  
 
