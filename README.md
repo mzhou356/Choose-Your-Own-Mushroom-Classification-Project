@@ -11,4 +11,6 @@ Mushroom_Project.pdf - mushroom report in PDF format. It contains the rendered f
 **Note:**  
 Both the R script and the Rmd will take a while to finish.  
 
-Some seeding issues prevent full reproducibility as noted on for example: https://github.com/mlr-org/mlr/issues/938 
+Some seeding issues prevent full reproducibility as noted on for example: https://github.com/mlr-org/mlr/issues/938  
+
+random forest with recursive feature elimination tends to produce different results on different systems, this can cause slight different feature results for model 3 to model 5  
