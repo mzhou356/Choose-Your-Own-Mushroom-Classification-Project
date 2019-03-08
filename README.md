@@ -1,5 +1,7 @@
 # Choose-Your-Own-Mushroom-Classification-Project
 
+Data Source: https://archive.ics.uci.edu/ml/datasets/mushroom
+
 This Mushroom Classification project is for the online Harvard Data Science Capstone course. 
 
 Mushroom_Project.R - R script for performing supervised classification machine learning tasks. This script performs 5 machine learning tasks. It prints accuracy comparison data frame and top 5 feature comparison data frame as outputs along with 5 tree based models in the Workspace.
